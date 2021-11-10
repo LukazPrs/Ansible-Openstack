@@ -1,0 +1,89 @@
+---
+- name: Copiando script
+  copy:
+    src: "{{ item }}"
+    dest: /root/
+    mode: +x
+  with_fileglob:
+    - criar_banco.sh
+    - .my.cnf
+    - criar_usuarios.sh
+
+- name: Criando banco keystone etc.
+  shell: bash /root/criar_banco.sh keystone keystone "{{ keystone_db_pass }}"
+  tags: always
+
+
+- name: Instalando keystone 
+  apt:
+    name: "{{packages}}"
+    state: latest
+  vars:
+    packages:
+      - keystone
+      - python3-openstackclient
+      - apache2
+      - libapache2-mod-wsgi-py3
+      - python3-oauth2client
+
+- name: Configurando arquivo keystone.conf
+  lineinfile:
+    dest=/etc/keystone/keystone.conf
+    regexp="{{item.regexp}}"
+    line="{{item.line}}"
+  with_items:
+    - {'regexp': "#memcache_servers = .*", 'line': "memcache_servers = controller:11211"}
+    - {'regexp': "connection = sqlite.*", 'line': "connection = mysql+pymysql://keystone:{{keystone_db_pass}}@controller/keystone"}
+    - {'regexp': "# has security requirements regarding.*", 'line': "provider = fernet"}
+        
+- name: Reiniciando mariadb rabbitmq-server memcached 
+  service:
+    name: "{{item}}"
+    state: restarted
+  with_items:
+    - mariadb
+    - rabbitmq-server
+    - memcached
+
+- name: Populando banco keystone
+  shell: "{{item}}"
+  with_items:
+    - cd /root/ && su -s /bin/bash keystone -c "keystone-manage db_sync"
+    - keystone-manage fernet_setup --keystone-user keystone --keystone-group keystone
+    - keystone-manage credential_setup --keystone-user keystone --keystone-group keystone
+    - keystone-manage bootstrap --bootstrap-password {{admin_pass}} --bootstrap-admin-url http://controller:5000/v3/ --bootstrap-internal-url http://controller:5000/v3/ --bootstrap-public-url http://controller:5000/v3/ --bootstrap-region-id RegionOne
+
+- name: Configurando apache ServerName
+  lineinfile:
+    path: /etc/apache2/apache2.conf
+    #regexp: "#ServerRoot.*"
+    insertafter: "#ServerRoot.*"
+    line: ServerName controller
+    state: present  
+
+- name: Reiniciando apache
+  service:
+    name: apache2
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+
+- name: Criando admin-openrc
+  copy:
+    dest: /root/admin-openrc
+    mode: +x
+    content: |
+      export OS_PROJECT_DOMAIN_NAME=default  
+      export OS_USER_DOMAIN_NAME=default  
+      export OS_PROJECT_NAME=admin  
+      export OS_USERNAME=admin  
+      export OS_PASSWORD={{admin_pass}}  
+      export OS_AUTH_URL=http://controller:5000/v3  
+      export OS_IDENTITY_API_VERSION=3  
+      export OS_IMAGE_API_VERSION=2  
+      export OS_VOLUME_API_VERSION=3
+
+- name: Criando projeto 
+  shell: "{{item}}"
+  with_items:
+    - source ~/admin-openrc && openstack project create --domain default --description "Service Project" service 

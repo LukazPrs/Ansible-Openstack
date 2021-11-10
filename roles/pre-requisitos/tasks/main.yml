@@ -1,0 +1,98 @@
+---
+# tasks file for roles/pre-requisitos
+
+- name: Adicionando dns google ao resolv.conf
+  lineinfile:
+    dest: /etc/resolv.conf
+    regexp: 'nameserver'
+    line: 'nameserver 8.8.8.8'
+
+- name: Adicionando NTP server
+  lineinfile:
+    dest: /etc/systemd/timesyncd.conf  
+    regexp: '#NTP='
+    line: 'NTP=controller' 
+    state: present
+
+- name: Adicioanando entradas em hosts
+  blockinfile:
+    path: /etc/hosts
+    block: |
+      {{ item.ip }} {{ item.name }}
+    marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.name }}"
+  loop:
+    - { name: controller, ip: 10.0.0.11 }
+    - { name: compute, ip: 10.0.0.31 }
+    - { name: storage, ip: 10.0.0.41 }
+
+- name: Instalando software-properties-common 
+  apt:
+    name: software-properties-common
+    state: present
+
+- name: Adicionando repositorio openstack wallaby
+  shell: add-apt-repository cloud-archive:wallaby -y
+
+- name: Apt-get update
+  apt:
+    update_cache: yes
+    #upgrade: yes
+
+- name: Instalando mariadb, rabbit e memcached
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - mariadb-server
+      - rabbitmq-server
+      - memcached
+      - python3-pymysql
+
+- name: Mudando autenticacao mysql com plugin
+  shell: mysql -u root -e 'UPDATE mysql.user SET plugin="mysql_native_password" WHERE user="root" AND host="localhost"'
+- name: Flush Privileges
+  shell: mysql -u root -e 'FLUSH PRIVILEGES'
+- name: Colocando senha no mysql
+  mysql_user:
+    login_host: 'localhost'
+    login_user: 'root'
+    login_password: ''
+    name: 'root'
+    password: '{{ mysql_root_password }}'
+    state: present
+    
+- name: Adicionando usuario no rabbitmq
+  rabbitmq_user:
+    user: openstack
+    password: "{{rabbit_pass}}"
+    permissions:
+      - vhost: /
+        configure_priv: .*
+        read_priv: .*
+        write_priv: .*
+    state: present
+
+- name: Editando arquivo 50-server mariadb
+  lineinfile:
+    dest: /etc/mysql/mariadb.conf.d/50-server.cnf
+    regexp: '{{item.regexp}}'
+    line: '{{item.line}}'
+  with_items:
+    - {'regexp': "bind-address", 'line': "bind-address            = 0.0.0.0"}
+    - {'regexp': "#max_connections", 'line': "max_connections         = 500"}
+
+- name: Editando arquivo memcached.conf
+  lineinfile:
+    dest: /etc/memcached.conf
+    regexp: '-l 127.0.0.1'
+    line: '-l 0.0.0.0' 
+
+- name: Reiniciando mariadb, rabbitmq e memcached
+  service:
+    name: '{{item}}'
+    state: restarted
+  with_items:
+    - mariadb
+    - memcached
+    - rabbitmq-server

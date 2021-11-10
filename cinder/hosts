@@ -1,0 +1,6 @@
+[controller]
+10.0.0.11
+[compute]
+10.0.0.31
+[storage]
+10.0.0.41

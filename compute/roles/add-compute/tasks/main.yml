@@ -1,0 +1,143 @@
+---
+# tasks file for roles/add-compute
+- name: Adicionando dns google ao resolv.conf [compute]
+  lineinfile:
+    dest: /etc/resolv.conf
+    regexp: 'nameserver'
+    line: 'nameserver 8.8.8.8'
+
+- name: Adicionando NTP server [compute]
+  lineinfile:
+    dest: /etc/systemd/timesyncd.conf  
+    regexp: '#NTP='
+    line: 'NTP=controller' 
+    state: present
+
+- name: Adicioanando entradas em hosts [compute]
+  blockinfile:
+    path: /etc/hosts
+    block: |
+      {{ item.ip }} {{ item.name }}
+    marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.name }}"
+  loop:
+    - { name: controller, ip: 10.0.0.11 }
+    - { name: compute, ip: 10.0.0.31 }
+    - { name: storage, ip: 10.0.0.41 }
+
+- name: Instalando software-properties-common [compute]
+  apt:
+    name: software-properties-common
+    state: present
+
+- name: Adicionando repositorio openstack wallaby [compute]
+  shell: add-apt-repository cloud-archive:wallaby -y
+
+- name: Apt-get update & upgrade [compute]
+  apt:                                                                                                                                              
+    update_cache: yes
+    #upgrade: yes
+  
+
+- name: Instalando pacotes nova[compute]
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - nova-compute
+      - nova-compute-kvm
+      - qemu-system-data
+
+- name: Verificando nova.conf[compute]
+  stat: path=/etc/nova/nova.conf
+  register: verifique
+- name: Fazendo backup nova.conf[compute]
+  shell: mv /etc/nova/nova.conf /etc/nova/nova.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando nova.conf[compute[com neutron configurado[cinder configurado]]]
+  copy:
+    dest: /etc/nova/nova.conf
+    mode: 0640
+    group: nova
+    content: |
+      [DEFAULT]
+      my_ip = 10.0.0.31
+      state_path = /var/lib/nova
+      enabled_apis = osapi_compute,metadata
+      log_dir = /var/log/nova
+      
+      use_neutron = True  
+      linuxnet_interface_driver = nova.network.linux_net.LinuxBridgeInterfaceDriver  
+      firewall_driver = nova.virt.firewall.NoopFirewallDriver  
+      vif_plugging_is_fatal = True  
+      vif_plugging_timeout = 300
+
+      transport_url = rabbit://openstack:{{rabbit_pass}}@controller
+      
+      [api]
+      auth_strategy = keystone
+      
+      [vnc]
+      enabled = True
+      server_listen = 0.0.0.0
+      server_proxyclient_address = $my_ip
+      novncproxy_base_url = http://10.0.0.11:6080/vnc_auto.html
+      
+      [glance]
+      api_servers = http://controller:9292
+      
+      [oslo_concurrency]
+      lock_path = $state_path/tmp
+      
+      [keystone_authtoken]
+      www_authenticate_uri = http://controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = nova
+      password = {{nova_pass}}
+      
+      [placement]
+      auth_url = http://controller:5000
+      os_region_name = RegionOne
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = placement
+      password = {{placement_pass}}
+      
+      [wsgi]
+      api_paste_config = /etc/nova/api-paste.ini
+
+      [neutron]
+      auth_url = http://controller:5000
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      region_name = RegionOne
+      project_name = service
+      username = neutron
+      password = {{neutron_pass}} 
+      service_metadata_proxy = True
+      metadata_proxy_shared_secret = {{neutron_meta_pass}}
+
+      [cinder]
+      os_region_name = RegionOne
+
+- name: Habilitando virtualizador qemu
+  lineinfile:
+    dest: /etc/nova/nova-compute.conf
+    regexp: 'virt_type='
+    line: 'virt_type=qemu' 
+
+- name: Reiniciando nova compute
+  service:
+    name: nova-compute
+    state: restarted
+    enabled: yes
+

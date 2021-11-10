@@ -1,0 +1,38 @@
+- name: controller playbook
+  hosts: controller
+  become: True
+  roles:
+    - pre-requisitos
+    - keystone
+    - glance
+    - nova
+    - neutron
+    - horizon
+  vars:
+    provider: enp0s3
+
+    mysql_root_password: 12345
+    wp_mysql_db: wordpress
+    wp_mysql_user: wordpress
+
+    rabbit_pass: rabbitPass
+
+    keystone_db_pass: keystoneDBPass
+    admin_pass: adminPass
+    
+    glance_db_pass: glanceDBPass
+    glance_pass: glancePass
+
+    nova_db_pass: novaDBPass
+    nova_pass: novaPass
+
+    placement_db_pass: placementDBPass
+    placement_pass: placementPass
+
+    neutron_db_pass: neutronDBPass
+    neutron_pass: neutronPass
+    neutron_meta_pass: neutronMetaPass
+
+- name: Chamando playbook playbook-compute.yml
+  import_playbook: compute/playbook-compute.yml
+

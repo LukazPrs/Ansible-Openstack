@@ -1,0 +1,25 @@
+---
+# tasks file for roles/horizon
+
+- name: Instalando horizon
+  apt:
+    name: openstack-dashboard
+    state: present
+
+- name: Editando dashboad horizon [local_settings.py]
+  lineinfile:
+    dest: /etc/openstack-dashboard/local_settings.py
+    regexp: "{{item.regexp}}"
+    line: "{{item.line}}"
+  with_items:
+     - {'regexp': "        'LOCATION': '127.0.0.1:11211'", 'line': "        'LOCATION': 'controller:11211',"}
+     - {'regexp': "#SESSION_ENGINE =", 'line': "SESSION_ENGINE = 'django.contrib.sessions.backends.cache'"}
+     - {'regexp': "OPENSTACK_HOST =", 'line': "OPENSTACK_HOST = \"controller\""}
+     - {'regexp': "OPENSTACK_KEYSTONE_URL =", 'line': "OPENSTACK_KEYSTONE_URL = \"http://controller:5000/v3\""}
+     - {'regexp': "TIME_ZONE", 'line': "TIME_ZONE = \"America/Cuiaba\""}
+
+- name: Reiniciando apache[horizon]
+  service:
+    name: apache2
+    state: restarted
+

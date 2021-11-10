@@ -1,0 +1,210 @@
+---
+# tasks file for roles/neutron
+
+- name: Criando usuario/role/service/endpoints neutron
+  shell: bash /root/criar_usuarios.sh neutron {{neutron_pass}} network "Serviço de Compute" http://controller:9696
+
+- name: Criando banco neutron
+  shell: bash /root/criar_banco.sh neutron_ml2 neutron "{{neutron_db_pass}}"
+  
+- name: Instalando pacotes neutron(nó rede no controller)
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - neutron-server
+      - neutron-plugin-ml2
+      - neutron-linuxbridge-agent
+      - neutron-l3-agent
+      - neutron-dhcp-agent
+      - neutron-metadata-agent
+      - python3-neutronclient
+
+- name: Verificando neutron.conf
+  stat: path=/etc/neutron/neutron.conf
+  register: verifique
+- name: Fazendo backup neutron.conf
+  shell: mv /etc/neutron/neutron.conf /etc/neutron/neutron.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando novo arquivo neutron.conf com conteudo
+  copy:
+    dest: /etc/neutron/neutron.conf
+    mode: 0640
+    group: neutron
+    content: |
+      [DEFAULT]
+      core_plugin = ml2
+      service_plugins = router
+      auth_strategy = keystone
+      state_path = /var/lib/neutron
+      dhcp_agent_notification = True
+      allow_overlapping_ips = True
+      notify_nova_on_port_status_changes = True
+      notify_nova_on_port_data_changes = True
+      
+      transport_url = rabbit://openstack:{{rabbit_pass}}@controller
+      
+      [agent]
+      root_helper = sudo /usr/bin/neutron-rootwrap /etc/neutron/rootwrap.conf
+      
+      [keystone_authtoken]
+      www_authenticate_uri = controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = neutron
+      password = {{neutron_pass}}
+      
+      [database]
+      connection = mysql+pymysql://neutron:{{neutron_db_pass}}@controller/neutron_ml2
+      
+      [nova]
+      auth_url = http://controller:5000
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      region_name = RegionOne
+      project_name = service
+      username = nova
+      password = {{nova_pass}}
+      
+      [oslo_concurrency]
+      lock_path = $state_path/tmp
+
+- name: Editando arquivo neutron l3_agent.ini
+  lineinfile:
+    dest: /etc/neutron/l3_agent.ini
+    regexp: '#interface_driver'
+    line: 'interface_driver = linuxbridge'
+
+- name: Editando arquivo neutron dhcp_agent.ini 
+  lineinfile:
+    dest: /etc/neutron/dhcp_agent.ini
+    regexp: "{{item.regexp}}"
+    line: "{{item.line}}"
+  with_items:
+    - {'regexp': "#interface_driver", 'line': "interface_driver = linuxbridge"}
+    - {'regexp': "#dhcp_driver", 'line': "dhcp_driver = neutron.agent.linux.dhcp.Dnsmasq"}
+    - {'regexp': "#enable_isolated_metadata", 'line': "enable_isolated_metadata = true"}
+
+- name: Editando arquivo neutron metadata_agent.ini
+  lineinfile:
+    dest: /etc/neutron/metadata_agent.ini
+    regexp: "{{item.regexp}}"
+    line: "{{item.line}}"
+  with_items:
+    - {'regexp': "#nova_metadata_host", 'line': "nova_metadata_host = controller"}
+    - {'regexp': "#metadata_proxy_shared_secret", 'line': "metadata_proxy_shared_secret = {{neutron_meta_pass}}"}
+    - {'regexp': "#memcache_servers", 'line': "memcache_servers = controller:11211"}
+
+- name: Editando arquivo neutron ml2_conf.ini
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/ml2_conf.ini
+    #regexp: '\[ml2\]'
+    insertafter: '\[ml2\]'
+    line: "{{item.line}}"
+  with_items:
+    - {'line': "extension_drivers = port_security"}
+    - {'line': "mechanism_drivers = linuxbridge"}
+    - {'line': "tenant_network_types = vxlan"}
+    - {'line': "type_drivers = flat,vlan,vxlan"}
+
+- name: Editando arquivo neutron linuxbridge_agent.ini
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+    #regexp: '\[ml2\]'
+    insertafter: '\[securitygroup\]'
+    line: "{{item.line}}"
+  with_items:
+    - {'line': "enable_security_group = True"}
+    - {'line': "firewall_driver = iptables"}
+    - {'line': "enable_ipset = True"}
+
+- name: Adicionando local_ip em linuxbridge_agent.ini
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+    regexp: '#local_ip'
+    line: 'local_ip = 10.0.0.11'
+
+- name: Adicionando configuração neutron em nova.conf
+  lineinfile:
+    dest: /etc/nova/nova.conf
+    insertafter: 'log_dir ='
+    line: "{{item.line}}"
+  with_items:
+    - {'line': "use_neutron = True"}
+    - {'line': "linuxnet_interface_driver = nova.network.linux_net.LinuxBridgeInterfaceDriver"}
+    - {'line': "firewall_driver = nova.virt.firewall.NoopFirewallDriver"}
+    - {'line': "vif_plugging_is_fatal = True"}
+    - {'line': "vif_plugging_timeout = 300"}
+
+- name: Adicionando bloco [neutron] em nova.conf
+  lineinfile:
+    dest: /etc/nova/nova.conf
+    #state: present
+    insertafter: '# END ANSIBLE MANAGED BLOCK' 
+    line: "{{item.line}}"
+  with_items:
+    - {'line': "metadata_proxy_shared_secret = {{neutron_meta_pass}}"}
+    - {'line': "service_metadata_proxy = True"}
+    - {'line': "password = {{neutron_pass}}"}
+    - {'line': "username = neutron"}
+    - {'line': "project_name = service "}
+    - {'line': "region_name = RegionOne"}
+    - {'line': "user_domain_name = default "}
+    - {'line': "project_domain_name = default "}
+    - {'line': "auth_type = password "}
+    - {'line': "auth_url = http://controller:5000 "}
+    - {'line': "[neutron]"}
+
+- name: Criando symbolic link para plugin.ini
+  file:
+   src: /etc/neutron/plugins/ml2/ml2_conf.ini
+   dest: /etc/neutron/plugin.ini
+   state: link
+
+- name: Populando banco neutron
+  shell: cd /root/ && su -s /bin/bash neutron -c "neutron-db-manage --config-file /etc/neutron/neutron.conf --config-file /etc/neutron/plugin.ini upgrade head"
+
+- name: Habilitando serviços neutron e reiniciando nova
+  service:
+    name: "{{item}}"
+    state: restarted
+    enabled: yes
+  with_items:
+    - neutron-dhcp-agent
+    - neutron-l3-agent
+    - neutron-linuxbridge-agent
+    - neutron-metadata-agent
+    - neutron-server
+    - nova-api
+    - nova-compute
+
+- name: Adicioanando physnet1 como flat em ml2_conf.ini
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/ml2_conf.ini
+    insertafter: '\[ml2_type_flat\]'
+    line: 'flat_networks = physnet1'
+
+- name: Mapeando interface/tun physnet1:provider em linuxbridge_agent.ini
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+    insertafter: '\[linux_bridge\]'
+    line: 'physical_interface_mappings = physnet1:{{provider}}'
+
+- name: Habilitando vxlan network
+  lineinfile:
+    dest: /etc/neutron/plugins/ml2/linuxbridge_agent.ini
+    regexp: 'enable_vxlan = false'
+    line: 'enable_vxlan = true'
+
+- name: Reiniciando linuxbridge-agent
+  service:
+    name: neutron-linuxbridge-agent
+    state: restarted
+

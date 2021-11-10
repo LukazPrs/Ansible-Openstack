@@ -1,0 +1,12 @@
+- name: storage playbook
+  hosts: storage 
+  become: True
+  roles:
+    - cinder
+  vars:
+    cinder_db_pass: cinderDBPass
+    cinder_pass: cinderPass
+
+    rabbit_pass: rabbitPass
+    disco: /dev/sdb  ##disco a ser usado pelo lvm 
+

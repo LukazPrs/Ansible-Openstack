@@ -1,0 +1,121 @@
+---
+# tasks file for roles/cinder
+#
+- name: Adicionando dns google ao resolv.conf
+  lineinfile:
+    dest: /etc/resolv.conf
+    regexp: 'nameserver'
+    line: 'nameserver 8.8.8.8'
+
+- name: Adicionando NTP server
+  lineinfile:
+    dest: /etc/systemd/timesyncd.conf  
+    regexp: '#NTP='
+    line: 'NTP=controller' 
+    state: present
+                                                                                                                                                                                          
+- name: Adicioanando entradas em hosts
+  blockinfile:
+    path: /etc/hosts
+    block: |
+      {{ item.ip }} {{ item.name }}
+    marker: "# {mark} ANSIBLE MANAGED BLOCK {{ item.name }}"
+  loop:
+    - { name: controller, ip: 10.0.0.11 }
+    - { name: compute, ip: 10.0.0.31 }
+    - { name: storage, ip: 10.0.0.41 }
+
+- name: Instalando software-properties-common
+  apt:
+    name: software-properties-common
+    state: present
+
+- name: Adicionando repositorio openstack wallaby
+  shell: add-apt-repository cloud-archive:wallaby -y
+
+- name: Apt-get update
+  apt:
+    update_cache: yes
+    #upgrade: yes
+
+- name: ##Create a volume group on top of /dev/sda1 with physical extent size = 32MB
+  lvg:
+    vg: vg_volume01
+    pvs: "{{disco}}"
+    pesize: 32
+
+- name: Instalando cinder-volume[storage node]
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - cinder-volume
+      - python3-mysqldb
+      - python3-rtslib-fb
+      - tgt
+      - thin-provisioning-tools
+      - targetcli-fb
+
+- name: Verificando cinder.conf
+  stat: path=/etc/cinder/cinder.conf
+  register: verifique
+- name: Fazendo backup cinder.conf
+  shell: mv /etc/cinder/cinder.conf /etc/cinder/cinder.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando novo arquivo cinder.conf[LVM CONFIGURADO]
+  copy:
+    dest: /etc/cinder/cinder.conf
+    mode: 0640
+    group: cinder
+    content: |
+      [DEFAULT]
+      my_ip = 10.0.0.41
+      rootwrap_config = /etc/cinder/rootwrap.conf
+      api_paste_confg = /etc/cinder/api-paste.ini
+      state_path = /var/lib/cinder
+      auth_strategy = keystone
+      
+      transport_url = rabbit://openstack:{{rabbit_pass}}@controller
+      enable_v3_api = True
+      
+      glance_api_servers = http://controller:9292
+      
+      enabled_backends = lvm
+      
+      [database]
+      connection = mysql+pymysql://cinder:{{cinder_db_pass}}@controller/cinder
+      
+      [keystone_authtoken]
+      www_authenticate_uri = http://controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = cinder
+      password = {{cinder_pass}}
+      
+      [oslo_concurrency]
+      lock_path = $state_path/tmp
+         
+      [lvm]
+      target_helper = tgtadm
+      target_protocol = iscsi
+      target_ip_address = 10.0.0.41
+      volume_group = vg_volume01
+      volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+      volumes_dir = $state_path/volumes
+
+- name: Reiniciando cinder volume
+  service:
+    name: "{{item}}"
+    state: restarted
+    enabled: yes
+  with_items:
+    - cinder-volume
+    - tgt
+
+

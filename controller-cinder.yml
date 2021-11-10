@@ -1,0 +1,14 @@
+- name: cinder-pre-requisitos playbook
+  hosts: controller
+  become: True
+  roles:
+    - controller-cinder
+
+  vars:
+    cinder_pass: cinderPass
+    cinder_db_pass: cinderDBPass
+    rabbit_pass: rabbitPass
+
+- name: Chamando playbook playbook-cinder.yml # Instalação e configuração cinder
+  import_playbook: cinder/playbook-cinder.yml
+

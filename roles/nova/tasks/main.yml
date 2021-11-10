@@ -1,0 +1,181 @@
+---
+# tasks file for roles/nova
+#
+- name: Criando usuario/role/service/endpoints nova
+  shell: bash /root/criar_usuarios.sh nova {{nova_pass}} compute "Serviço de Compute" http://controller:8774/v2.1/%\(tenant_id\)s
+  
+- name: Criando usuario/role/service/endpoints placement 
+  shell: bash /root/criar_usuarios.sh placement {{placement_pass}} placement "Serviço de Placement" http://controller:8778
+
+- name: Criando banco nova
+  shell: bash /root/criar_banco.sh nova nova "{{nova_db_pass}}"
+
+- name: Criando banco nova_api
+  shell: bash /root/criar_banco.sh nova_api nova "{{nova_db_pass}}"
+
+- name: Criando banco nova_cell
+  shell: bash /root/criar_banco.sh nova_cell0 nova "{{nova_db_pass}}"
+
+- name: Criando banco placement
+  shell: bash /root/criar_banco.sh placement placement "{{placement_db_pass}}"
+
+- name: Instalando pacotes nova
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - nova-api
+      - nova-conductor
+      - nova-scheduler
+      - nova-novncproxy
+      - placement-api
+      - python3-novaclient
+
+- name: Verificando nova.conf
+  stat: path=/etc/nova/nova.conf
+  register: verifique
+- name: Fazendo backup nova.conf
+  shell: mv /etc/nova/nova.conf /etc/nova/nova.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando novo arquivo nova.conf com conteudo
+  copy:
+    dest: /etc/nova/nova.conf
+    mode: 0640
+    group: nova
+    content: |
+      [DEFAULT]
+      my_ip = 10.0.0.11
+      state_path = /var/lib/nova
+      enabled_apis = osapi_compute,metadata
+      log_dir = /var/log/nova
+      
+      transport_url = rabbit://openstack:{{rabbit_pass}}@controller
+      
+      [api]
+      auth_strategy = keystone
+      
+      [glance]
+      api_servers = http://controller:9292
+      
+      [oslo_concurrency]
+      lock_path = $state_path/tmp
+      
+      [api_database]
+      connection = mysql+pymysql://nova:{{nova_db_pass}}@controller/nova_api
+      
+      [database]
+      connection = mysql+pymysql://nova:{{nova_db_pass}}@controller/nova
+      
+      [keystone_authtoken]
+      www_authenticate_uri = http://controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = nova
+      password = {{nova_pass}}
+      
+      [placement]
+      auth_url = http://controller:5000
+      os_region_name = RegionOne
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = placement
+      password = {{placement_pass}}
+      
+      [wsgi]
+      api_paste_config = /etc/nova/api-paste.ini
+
+- name: Verificando placement.conf
+  stat: path=/etc/placement/placement.conf
+  register: verifique
+- name: Fazendo backup placement.conf
+  shell: mv /etc/placement/placement.conf /etc/placement/placement.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando novo arquivo placement.conf com conteudo
+  copy:
+    dest: /etc/placement/placement.conf
+    mode: 0640
+    group: placement
+    content: |
+      [DEFAULT]
+      debug = false
+      
+      [api]
+      auth_strategy = keystone
+      
+      [keystone_authtoken]
+      www_authenticate_uri = http://controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = placement
+      password = {{placement_pass}}
+      
+      [placement_database]
+      connection = mysql+pymysql://placement:{{placement_db_pass}}@controller/placement
+
+- name: Populando banco nova                                                                                      
+  shell: "{{item}}"
+  with_items:
+    - cd /root/ && su -s /bin/bash placement -c "placement-manage db sync" 
+    - cd /root/ && su -s /bin/bash nova -c "nova-manage api_db sync"
+    - cd /root/ && su -s /bin/bash nova -c "nova-manage cell_v2 map_cell0"
+    - cd /root/ && su -s /bin/bash nova -c "nova-manage db sync"
+    - cd /root/ && su -s /bin/bash nova -c "nova-manage cell_v2 create_cell --name cell1"
+
+- name: Reiniciando serviços nova
+  service:
+    name: "{{item}}"
+    state: restarted 
+    enabled: yes
+  with_items:
+    - nova-api
+    - nova-conductor
+    - nova-novncproxy
+    - nova-scheduler
+
+      ############# CONTROLLER SERÁ HOST PARA VMS ###############
+- name: Instalando nova-compute(controller criando vms) 
+  apt:
+    name: "{{packages}}"
+    state: present
+  vars:
+    packages:
+      - nova-compute
+      - nova-compute-kvm
+
+- name: Configurando vnc em nova.conf
+  blockinfile:
+    path: /etc/nova/nova.conf
+    state: present
+    content: |
+      [vnc]
+      enabled = True
+      server_listen = 0.0.0.0
+      server_proxyclient_address = 10.0.0.11
+      novncproxy_base_url = http://10.0.0.11:6080/vnc_auto.html
+
+- name: Habilitando virtualizador qemu no controller(host vms)
+  lineinfile:
+    dest: /etc/nova/nova-compute.conf
+    regexp: 'virt_type='
+    line: 'virt_type=qemu'
+
+- name: Reiniciando nova-compute
+  service:
+    name: nova-compute
+    state: restarted
+
+- name: Procurando/Ativando controller como host para vms
+  shell: cd /root/ && su -s /bin/bash nova -c "nova-manage cell_v2 discover_hosts"

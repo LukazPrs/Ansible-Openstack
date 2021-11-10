@@ -1,0 +1,68 @@
+---
+# tasks file for roles/glance
+
+- name: Criando usuario/role/service/endpoints glance
+  shell: bash /root/criar_usuarios.sh glance {{glance_pass}} image "Serviço de Imagens" http://controller:9292
+
+- name: Criando banco glance
+  shell: bash /root/criar_banco.sh glance glance "{{glance_db_pass}}" 
+
+- name: Instalando pacotes glance
+  apt:
+    name: glance
+    state: present
+
+- name: Verificando se glance-api.conf
+  stat: path=/etc/glance/glance-api.conf
+  register: verifique
+- name: Fazendo backup glance-api
+  shell: mv /etc/glance/glance-api.conf /etc/glance/glance-api.conf.BKP
+  when: verifique.stat.exists
+
+- name: Criando novo arquivo glance-api com conteudo
+  copy:
+    dest: /etc/glance/glance-api.conf
+    mode: 0640
+    group: glance
+    content: |
+      [DEFAULT]
+      bind_host = 0.0.0.0
+      
+      [glance_store]
+      stores = file,http
+      default_store = file
+      filesystem_store_datadir = /var/lib/glance/images/
+      
+      [database]
+      connection = mysql+pymysql://glance:{{glance_db_pass}}@controller/glance
+      
+      [keystone_authtoken]
+      www_authenticate_uri = http://controller:5000
+      auth_url = http://controller:5000
+      memcached_servers = controller:11211
+      auth_type = password
+      project_domain_name = default
+      user_domain_name = default
+      project_name = service
+      username = glance
+      password = {{glance_pass}}
+      
+      [paste_deploy]
+      flavor = keystone
+
+- name: Populando banco glance
+  shell: cd /root/ && su -s /bin/bash glance -c "glance-manage db_sync"
+
+- name: Reiniciando glance-api
+  service:
+    name: glance-api
+    state: restarted
+    enabled: yes
+
+- name: Baixando cirros
+  get_url:
+    url: http://download.cirros-cloud.net/0.5.1/cirros-0.5.1-x86_64-disk.img
+    dest: /root/cirros.img
+
+- name: Adicionando cirros ao glance
+  shell: source /root/admin-openrc && openstack image create cirros --file cirros.img --disk-format qcow2 --container-format bare --public

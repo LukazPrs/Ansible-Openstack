@@ -1,0 +1,33 @@
+- name: compute playbook
+  hosts: compute 
+  become: True
+  roles:
+    - add-compute
+    - neutron
+  vars:
+    provider: enp0s3
+
+    rabbit_pass: rabbitPass
+
+    nova_db_pass: novaDBPass
+    nova_pass: novaPass
+
+    placement_db_pass: placementDBPass
+    placement_pass: placementPass
+
+    neutron_pass: neutronPass
+    neutron_meta_pass: neutronMetaPass
+
+- name: Chamando playbook controller-cinder.yml # Executar pre-requisitos cinder no nó controller
+  import_playbook: ../controller-cinder.yml
+
+
+
+
+
+    #- name: Chamando playbook controller-compute-hosts.yml # Executar a atualização de banco para compute
+    #import_playbook: ../controller-compute-hosts.yml
+
+
+  #- name: Chamando playbook playbook-cinder.yml # Instalação e configuração cinder
+  #import_playbook: ../cinder/playbook-cinder.yml
